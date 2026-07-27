@@ -1,0 +1,75 @@
+name: Publish task image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/xwysyy-studio/interactbench-task
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out publisher repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Materialize pinned task assets
+        run: python scripts/prepare_task.py
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.IMAGE_NAME }}:cf1486-c1
+            ${{ env.IMAGE_NAME }}:cf1486-c1-a8228209
+
+      - name: Verify the published image contents
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="${IMAGE_NAME}@${IMAGE_DIGEST}"
+          docker pull "$image"
+          docker run --rm --entrypoint /bin/sh "$image" -ceu '
+            task=/opt/interactbench/data/problems/cf1486_c1
+            set -- "$task"/cases/*.in
+            test "$#" -eq 200
+            test -f "$task/desc.md"
+            test -f "$task/interactor/non_adaptive.cpp"
+            test -f "$task/interactor/adaptive.cpp"
+            test -f "$task/generator/gen_cases.cpp"
+            test -f "$task/meta.json"
+            test -f /opt/interactbench/LICENSE
+            test -f /opt/interactbench/third_party/testlib/LICENSE
+            test -f /opt/interactbench/third_party/testlib/testlib.h
+            cd /opt/interactbench
+            sha256sum -c SHA256SUMS
+          '
+          echo "Published ${image}" >> "$GITHUB_STEP_SUMMARY"

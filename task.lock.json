@@ -1,0 +1,16 @@
+{
+  "task_id": "cf1486_c1",
+  "image_tag": "cf1486-c1",
+  "case_count_per_mode": 100,
+  "expected_case_count": 200,
+  "interactbench": {
+    "repository": "https://github.com/kmsgk0/InteractBench.git",
+    "revision": "555a1c66babfc89abc22c19ede54a48652a417f5"
+  },
+  "dataset": {
+    "repository": "https://huggingface.co/datasets/kmsgk/InteractBench",
+    "revision": "a82282090288a7d28b9905d7064ece53c489b33a",
+    "file": "problems.jsonl",
+    "sha256": "555677cb30c96c8ae3a26aa5a54df1d7a6b64ef625fcbe622ce4fe51ae8dd2dd"
+  }
+}
