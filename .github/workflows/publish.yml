@@ -12,7 +12,7 @@ on:
         required: false
         default: "0"
       skip_existing:
-        description: "Skip tasks whose immutable tag is already in the registry"
+        description: "Skip a task only when both of its tags exist and resolve to the same digest"
         required: false
         default: "true"
 

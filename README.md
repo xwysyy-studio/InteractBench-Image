@@ -74,13 +74,16 @@ ranges is what keeps the modes separable, so `case_count_per_mode` cannot exceed
 Hugging Face dataset revision and the per-mode case count. For each task the
 publishing workflow verifies the dataset checksum, materializes the task from the
 pinned revision, generates the complete case pool, checks the produced file names
-against the set the task's interactor mode implies, builds the image, pushes it,
-and then reads `SHA256SUMS` back inside the published image.
+against the set the task's interactor mode implies, and builds the image. It then
+runs the image and reads `SHA256SUMS` back from inside it, and only pushes once
+that check passes, so an image that fails its own integrity check never reaches
+the registry.
 
 Tasks are published one at a time. The workflow accepts an explicit problem ID
-list, a cap on how many tasks one run publishes, and a switch that skips tasks
-whose immutable tag already exists, so the full dataset can be published across
-several unhurried runs.
+list, a cap on how many tasks one run publishes, and a switch that skips a task
+only when both of its tags already exist and resolve to the same digest, so the
+full dataset can be published across several unhurried runs and a task left
+half-pushed by an interrupted run is picked up again rather than skipped.
 
 The InteractBench source and dataset are distributed under MIT. The bundled
 testlib header carries its own MIT license under
