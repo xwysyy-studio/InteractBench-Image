@@ -118,11 +118,19 @@ jobs:
             floating="${IMAGE_NAME}:${task}"
             immutable="${IMAGE_NAME}:${task}-${lock_digest}"
 
-            if [ "${SKIP_EXISTING}" = "true" ] && docker manifest inspect "${immutable}" > /dev/null 2>&1; then
-              echo "skip ${task}, ${immutable} already published"
-              skipped=$((skipped + 1))
-              echo "| ${task} | | | skipped |" >> "$GITHUB_STEP_SUMMARY"
-              continue
+            # A task counts as published only when both tags exist and resolve
+            # to the same digest. Pushing the two tags is not atomic, so a run
+            # that died between them leaves the immutable tag alone in the
+            # registry, and skipping on that alone would strand the task.
+            if [ "${SKIP_EXISTING}" = "true" ]; then
+              immutable_digest="$(docker buildx imagetools inspect "${immutable}" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+              floating_digest="$(docker buildx imagetools inspect "${floating}" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+              if [ -n "${immutable_digest}" ] && [ "${immutable_digest}" = "${floating_digest}" ]; then
+                echo "skip ${task}, both tags already resolve to ${immutable_digest}"
+                skipped=$((skipped + 1))
+                echo "| ${task} | | | skipped |" >> "$GITHUB_STEP_SUMMARY"
+                continue
+              fi
             fi
 
             if ! python scripts/prepare_task.py --problem-ids "${task}"; then
