@@ -1,8 +1,5 @@
 {
-  "task_id": "cf1486_c1",
-  "image_tag": "cf1486-c1",
   "case_count_per_mode": 100,
-  "expected_case_count": 200,
   "interactbench": {
     "repository": "https://github.com/kmsgk0/InteractBench.git",
     "revision": "555a1c66babfc89abc22c19ede54a48652a417f5"

@@ -1,9 +1,20 @@
-name: Publish task image
+name: Publish task images
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      problem_ids:
+        description: "Space separated problem IDs (empty publishes every task in the dataset)"
+        required: false
+        default: ""
+      max_tasks:
+        description: "Stop after publishing this many tasks (0 publishes all selected)"
+        required: false
+        default: "0"
+      skip_existing:
+        description: "Skip tasks whose immutable tag is already in the registry"
+        required: false
+        default: "true"
 
 permissions:
   contents: read
@@ -15,6 +26,7 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
       - name: Check out publisher repository
         uses: actions/checkout@v4
@@ -24,11 +36,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Materialize pinned task assets
-        run: python scripts/prepare_task.py
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      # One task can hold 5.4 GB of cases, and building its image peaks around
+      # 16 GB with the context, the BuildKit source copy and the committed layer
+      # all resident. A stock runner does not have that much free.
+      - name: Reclaim runner disk
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/powershell \
+            /usr/share/swift
+          sudo docker image prune --all --force > /dev/null
+          df -h /
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -37,39 +56,156 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
-        id: image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64
-          push: true
-          provenance: false
-          tags: |
-            ${{ env.IMAGE_NAME }}:cf1486-c1
-            ${{ env.IMAGE_NAME }}:cf1486-c1-a8228209
-
-      - name: Verify the published image contents
+      - name: Publish each task
         env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          PROBLEM_IDS: ${{ inputs.problem_ids }}
+          MAX_TASKS: ${{ inputs.max_tasks }}
+          SKIP_EXISTING: ${{ inputs.skip_existing }}
         run: |
           set -euo pipefail
-          image="${IMAGE_NAME}@${IMAGE_DIGEST}"
-          docker pull "$image"
-          docker run --rm --entrypoint /bin/sh "$image" -ceu '
-            task=/opt/interactbench/data/problems/cf1486_c1
-            set -- "$task"/cases/*.in
-            test "$#" -eq 200
-            test -f "$task/desc.md"
-            test -f "$task/interactor/non_adaptive.cpp"
-            test -f "$task/interactor/adaptive.cpp"
-            test -f "$task/generator/gen_cases.cpp"
-            test -f "$task/meta.json"
-            test -f /opt/interactbench/LICENSE
-            test -f /opt/interactbench/third_party/testlib/LICENSE
-            test -f /opt/interactbench/third_party/testlib/testlib.h
-            cd /opt/interactbench
-            sha256sum -c SHA256SUMS
-          '
-          echo "Published ${image}" >> "$GITHUB_STEP_SUMMARY"
+
+          case "${MAX_TASKS}" in
+            ''|*[!0-9]*)
+              echo "max_tasks must be a non-negative integer, got '${MAX_TASKS}'" >&2
+              exit 1
+              ;;
+          esac
+          case "${SKIP_EXISTING}" in
+            true|false) ;;
+            *)
+              echo "skip_existing must be true or false, got '${SKIP_EXISTING}'" >&2
+              exit 1
+              ;;
+          esac
+
+          read_lock() {
+            python -c "import json,pathlib;print(json.loads(pathlib.Path('task.lock.json').read_text())$1)"
+          }
+          lock_digest="$(python -c "import hashlib,pathlib;print(hashlib.sha256(pathlib.Path('task.lock.json').read_bytes()).hexdigest()[:8])")"
+          source_revision="$(read_lock "['interactbench']['revision']")"
+          dataset_revision="$(read_lock "['dataset']['revision']")"
+
+          # Task IDs come from workflow input, so keep the shell from globbing
+          # them when the list is split into words.
+          set -f
+          if [ -n "${PROBLEM_IDS}" ]; then
+            tasks="${PROBLEM_IDS}"
+          else
+            python scripts/prepare_task.py --list-tasks > all-tasks.txt
+            tasks="$(tr '\n' ' ' < all-tasks.txt)"
+          fi
+
+          published=0
+          skipped=0
+          failed=0
+          {
+            echo "| task | mode | cases | result |"
+            echo "|---|---|---:|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cleanup_task() {
+            docker image rm -f "${IMAGE_NAME}:$1" "${IMAGE_NAME}:$1-${lock_digest}" > /dev/null 2>&1 || true
+            docker builder prune --all --force > /dev/null 2>&1 || true
+            rm -rf build .build
+          }
+
+          for task in ${tasks}; do
+            if [ "${MAX_TASKS}" != "0" ] && [ "${published}" -ge "${MAX_TASKS}" ]; then
+              echo "reached max_tasks=${MAX_TASKS}, stopping"
+              break
+            fi
+
+            floating="${IMAGE_NAME}:${task}"
+            immutable="${IMAGE_NAME}:${task}-${lock_digest}"
+
+            if [ "${SKIP_EXISTING}" = "true" ] && docker manifest inspect "${immutable}" > /dev/null 2>&1; then
+              echo "skip ${task}, ${immutable} already published"
+              skipped=$((skipped + 1))
+              echo "| ${task} | | | skipped |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            if ! python scripts/prepare_task.py --problem-ids "${task}"; then
+              failed=$((failed + 1))
+              echo "| ${task} | | | prepare failed |" >> "$GITHUB_STEP_SUMMARY"
+              cleanup_task "${task}"
+              continue
+            fi
+
+            mode="$(python -c "import json,pathlib;print(json.loads(pathlib.Path('build/manifest.json').read_text())['prepared'][0]['interactor_mode'])")"
+            cases="$(python -c "import json,pathlib;print(json.loads(pathlib.Path('build/manifest.json').read_text())['prepared'][0]['case_count'])")"
+
+            if ! docker build \
+              --file Dockerfile \
+              --build-arg "TASK_ID=${task}" \
+              --build-arg "LOCK_DIGEST=${lock_digest}" \
+              --build-arg "SOURCE_REVISION=${source_revision}" \
+              --build-arg "DATASET_REVISION=${dataset_revision}" \
+              --tag "${floating}" \
+              --tag "${immutable}" \
+              "build/${task}"; then
+              failed=$((failed + 1))
+              echo "| ${task} | ${mode} | ${cases} | build failed |" >> "$GITHUB_STEP_SUMMARY"
+              cleanup_task "${task}"
+              continue
+            fi
+
+            # The assets now live in the image layer; the build context is a
+            # second full copy and is dead weight for the rest of the iteration.
+            rm -rf build .build
+
+            # Verify before pushing, so a bad image never reaches the registry
+            # and never gets skipped as already published on a later run.
+            if ! docker run --rm \
+              --env "TASK_ID=${task}" \
+              --env "EXPECT_CASES=${cases}" \
+              --env "EXPECT_MODE=${mode}" \
+              --entrypoint /bin/sh "${immutable}" -c '
+                set -eu
+                root="/opt/interactbench/data/problems/$TASK_ID"
+                set -- "$root"/cases/*.in
+                test "$#" -eq "$EXPECT_CASES"
+                test -f "$root/desc.md"
+                test -f "$root/meta.json"
+                test -f "$root/generator/gen_cases.cpp"
+                case "$EXPECT_MODE" in
+                  non_adaptive) test -f "$root/interactor/non_adaptive.cpp" ;;
+                  adaptive) test -f "$root/interactor/adaptive.cpp" ;;
+                  both)
+                    test -f "$root/interactor/non_adaptive.cpp"
+                    test -f "$root/interactor/adaptive.cpp"
+                    ;;
+                  *) echo "unknown interactor mode $EXPECT_MODE" >&2; exit 1 ;;
+                esac
+                test -f /opt/interactbench/LICENSE
+                test -f /opt/interactbench/artifact.json
+                test -f /opt/interactbench/third_party/testlib/testlib.h
+                cd /opt/interactbench
+                sha256sum -c SHA256SUMS > /dev/null
+              '; then
+              failed=$((failed + 1))
+              echo "| ${task} | ${mode} | ${cases} | verification failed, not pushed |" >> "$GITHUB_STEP_SUMMARY"
+              cleanup_task "${task}"
+              continue
+            fi
+
+            if ! docker push "${immutable}" || ! docker push "${floating}"; then
+              failed=$((failed + 1))
+              echo "| ${task} | ${mode} | ${cases} | push failed |" >> "$GITHUB_STEP_SUMMARY"
+              cleanup_task "${task}"
+              continue
+            fi
+
+            digest="$(docker buildx imagetools inspect "${immutable}" --format '{{.Manifest.Digest}}' 2>/dev/null || echo unavailable)"
+            published=$((published + 1))
+            echo "| ${task} | ${mode} | ${cases} | ${digest} |" >> "$GITHUB_STEP_SUMMARY"
+
+            cleanup_task "${task}"
+            df -h / | tail -1
+          done
+
+          {
+            echo ""
+            echo "published ${published}, skipped ${skipped}, failed ${failed}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "${failed}" -eq 0
