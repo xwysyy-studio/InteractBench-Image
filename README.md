@@ -46,8 +46,9 @@ Resolve either tag to a digest and evaluate against the digest.
     └── interactor/
 ```
 
-`artifact.json` records the task ID, its interactor mode, the case count and
-every pinned revision. Consumers choose their own runner, compiler, isolation
+`artifact.json` records the task ID, its interactor mode, the number of cases
+that were generated successfully, the configured numbering capacity, and every
+pinned revision. Consumers choose their own runner, compiler, isolation
 mechanism, case selection, and result interpretation. The image has no custom
 entrypoint.
 
@@ -57,27 +58,33 @@ Case files are named by the upstream generator contract, which numbers
 non-adaptive cases from 1 and adaptive cases from 101. A task's `interactor_mode`
 in `meta.json` therefore decides which numbers exist:
 
-| `interactor_mode` | Case files | Generator invocation |
+| `interactor_mode` | Legal case numbers | Generator invocation |
 |---|---|---|
 | `non_adaptive` | `001.in` to `100.in` | seeds 1 to 100, `-mode=non` |
 | `adaptive` | `101.in` to `200.in` | seeds 1 to 100, `-mode=adp` |
 | `both` | `001.in` to `200.in` | `non` takes seeds 1 to 100, `adp` takes seeds 101 to 200 |
 
 An `adaptive` task has no `001.in`, and a `non_adaptive` task has no `101.in`.
-Both carry 100 cases; only `both` carries 200. The numbering gap between the two
-ranges is what keeps the modes separable, so `case_count_per_mode` cannot exceed
-100 without the ranges colliding.
+The publisher attempts every configured seed independently. If a generator
+fails deterministically for one seed, that numbered file is absent while later
+seeds are still attempted; numbers are never shifted or filled from another
+seed. At least one case must succeed. `case_count_per_mode` records the capacity
+of each numbering range, while `case_count` records the number of case files
+actually present. The numbering gap between the two ranges keeps the modes
+separable, so `case_count_per_mode` cannot exceed 100 without the ranges
+colliding.
 
 ## Reproducibility
 
 [`task.lock.json`](task.lock.json) pins the InteractBench source revision, the
 Hugging Face dataset revision and the per-mode case count. For each task the
 publishing workflow verifies the dataset checksum, materializes the task from the
-pinned revision, generates the complete case pool, checks the produced file names
-against the set the task's interactor mode implies, and builds the image. It then
-runs the image and reads `SHA256SUMS` back from inside it, and only pushes once
-that check passes, so an image that fails its own integrity check never reaches
-the registry.
+pinned revision, compiles the task generator, attempts every configured seed,
+and builds an image from the successful outputs in their original numbered
+positions. A compile failure or a task with no successful case fails
+preparation. The workflow then runs the image and reads `SHA256SUMS` back from
+inside it, and only pushes once that check passes, so an image that fails its own
+integrity check never reaches the registry.
 
 Tasks are published one at a time. The workflow accepts an explicit problem ID
 list, a cap on how many tasks one run publishes, and a switch that skips a task

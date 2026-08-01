@@ -6,7 +6,7 @@ ARG SOURCE_REVISION
 ARG DATASET_REVISION
 
 LABEL org.opencontainers.image.title="InteractBench task ${TASK_ID}"
-LABEL org.opencontainers.image.description="Tool-independent InteractBench task assets with the complete generated case pool"
+LABEL org.opencontainers.image.description="Tool-independent InteractBench task assets with successfully generated cases"
 LABEL org.opencontainers.image.source="https://github.com/xwysyy-studio/InteractBench-Image"
 LABEL org.opencontainers.image.url="https://github.com/kmsgk0/InteractBench"
 LABEL org.opencontainers.image.version="${TASK_ID}-${LOCK_DIGEST}"

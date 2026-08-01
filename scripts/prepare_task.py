@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -71,26 +72,114 @@ def clone_revision(repository: str, revision: str, destination: Path) -> None:
     run(["git", "checkout", "--quiet", "--detach", "FETCH_HEAD"], cwd=destination)
 
 
-def expected_case_names(interactor_mode: str, count_per_mode: int) -> list[str]:
-    """Case names the upstream generator produces for one interactor mode.
-
-    Mirrors scripts/gen_cases.py: ``non`` batches occupy 1..count and ``adp``
-    batches occupy 101..100+count, both zero padded to the same width.
-    """
+def case_generation_plan(
+    interactor_mode: str, count_per_mode: int
+) -> list[tuple[str, int, str]]:
+    """Return case filename, generator seed, and generator mode in file order."""
     width = max(3, len(str(count_per_mode)))
-    non_adaptive = [f"{number:0{width}d}.in" for number in range(1, count_per_mode + 1)]
+    non_adaptive = [
+        (f"{number:0{width}d}.in", number, "non")
+        for number in range(1, count_per_mode + 1)
+    ]
     adaptive = [
-        f"{number:0{width}d}.in"
-        for number in range(
-            ADAPTIVE_CASE_OFFSET + 1,
-            ADAPTIVE_CASE_OFFSET + 1 + count_per_mode,
+        (
+            f"{ADAPTIVE_CASE_OFFSET + index:0{width}d}.in",
+            seed,
+            "adp",
+        )
+        for index, seed in enumerate(
+            range(1, count_per_mode + 1),
+            start=1,
         )
     ]
     if interactor_mode == "adaptive":
         return adaptive
     if interactor_mode == "both":
-        return sorted(non_adaptive + adaptive)
+        adaptive = [
+            (name, seed + count_per_mode, mode)
+            for name, seed, mode in adaptive
+        ]
+        return non_adaptive + adaptive
     return non_adaptive
+
+
+def compile_generator(task_root: Path, upstream: Path) -> Path:
+    generator_dir = task_root / "generator"
+    source = generator_dir / "gen_cases.cpp"
+    compiler_name = os.environ.get("CXX", "g++")
+    compiler = shutil.which(compiler_name)
+    if compiler is None and Path(compiler_name).is_file():
+        compiler = compiler_name
+    if compiler is None:
+        raise FileNotFoundError(f"compiler not found: {compiler_name}")
+
+    binary = generator_dir / ("gen_cases.exe" if os.name == "nt" else "gen_cases")
+    run(
+        [
+            compiler,
+            "-std=c++17",
+            "-O2",
+            "-pipe",
+            "-o",
+            str(binary),
+            str(source),
+            f"-I{(upstream / 'third_party' / 'testlib').resolve()}",
+        ]
+    )
+    return binary
+
+
+def generate_cases(
+    task_root: Path,
+    upstream: Path,
+    interactor_mode: str,
+    count_per_mode: int,
+) -> list[str]:
+    cases_dir = task_root / "cases"
+    cases_dir.mkdir(parents=True, exist_ok=True)
+    for existing in cases_dir.glob("*.in"):
+        existing.unlink()
+
+    generator_dir = task_root / "generator"
+    generator = compile_generator(task_root, upstream)
+    successful: list[str] = []
+    failed: list[str] = []
+    try:
+        for name, seed, mode in case_generation_plan(
+            interactor_mode, count_per_mode
+        ):
+            output = cases_dir / name
+            temporary = cases_dir / f".{name}.tmp"
+            try:
+                with temporary.open("wb") as handle:
+                    result = subprocess.run(
+                        [str(generator), str(seed), f"-mode={mode}"],
+                        cwd=generator_dir,
+                        stdout=handle,
+                        check=False,
+                    )
+                if result.returncode == 0:
+                    temporary.replace(output)
+                    successful.append(name)
+                else:
+                    failed.append(name)
+            finally:
+                temporary.unlink(missing_ok=True)
+    finally:
+        generator.unlink(missing_ok=True)
+
+    if not successful:
+        raise RuntimeError(f"generator produced no cases for {task_root.name}")
+    if failed:
+        preview = ", ".join(failed[:10])
+        suffix = "..." if len(failed) > 10 else ""
+        print(
+            f"[WARN] {task_root.name}: skipped {len(failed)} failed cases: "
+            f"{preview}{suffix}",
+            file=sys.stderr,
+            flush=True,
+        )
+    return successful
 
 
 def read_interactor_mode(task_root: Path) -> str:
@@ -153,38 +242,12 @@ def materialize_task(
     task_root = staging_root / task_id
     interactor_mode = read_interactor_mode(task_root)
 
-    run(
-        [
-            sys.executable,
-            str(upstream / "scripts" / "gen_cases.py"),
-            "--root",
-            str(staging_root),
-            "--problem-ids",
-            task_id,
-            "--count",
-            str(count_per_mode),
-            "--clean",
-            "--rebuild",
-        ],
-        cwd=upstream,
+    actual_names = generate_cases(
+        task_root,
+        upstream,
+        interactor_mode,
+        count_per_mode,
     )
-
-    for generated_binary in (
-        task_root / "generator" / "gen_cases",
-        task_root / "generator" / "gen_cases.exe",
-    ):
-        generated_binary.unlink(missing_ok=True)
-
-    actual_names = sorted(path.name for path in (task_root / "cases").glob("*.in"))
-    expected_names = expected_case_names(interactor_mode, count_per_mode)
-    if actual_names != expected_names:
-        missing = sorted(set(expected_names) - set(actual_names))
-        unexpected = sorted(set(actual_names) - set(expected_names))
-        raise RuntimeError(
-            f"case set mismatch for {task_id} ({interactor_mode}): "
-            f"expected {len(expected_names)}, got {len(actual_names)}, "
-            f"missing {missing[:5]}, unexpected {unexpected[:5]}"
-        )
 
     task_output = output_root / task_id
     if task_output.exists():
