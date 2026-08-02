@@ -64,6 +64,10 @@ in `meta.json` therefore decides which numbers exist:
 | `adaptive` | `101.in` to `200.in` | seeds 1 to 100, `-mode=adp` |
 | `both` | `001.in` to `200.in` | `non` takes seeds 1 to 100, `adp` takes seeds 101 to 200 |
 
+The `adp` seed ranges intentionally differ between `adaptive` and `both`; they
+match the released dataset, and regeneration reproduces the published case
+files byte for byte.
+
 An `adaptive` task has no `001.in`, and a `non_adaptive` task has no `101.in`.
 The publisher attempts every configured seed independently. If a generator
 fails deterministically for one seed, that numbered file is absent while later
