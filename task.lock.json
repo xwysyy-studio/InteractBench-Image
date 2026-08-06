@@ -1,5 +1,6 @@
 {
   "case_count_per_mode": 100,
+  "image_layout": 2,
   "interactbench": {
     "repository": "https://github.com/kmsgk0/InteractBench.git",
     "revision": "555a1c66babfc89abc22c19ede54a48652a417f5"

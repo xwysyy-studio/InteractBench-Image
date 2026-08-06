@@ -143,6 +143,22 @@ jobs:
             mode="$(python -c "import json,pathlib;print(json.loads(pathlib.Path('build/manifest.json').read_text())['prepared'][0]['interactor_mode'])")"
             cases="$(python -c "import json,pathlib;print(json.loads(pathlib.Path('build/manifest.json').read_text())['prepared'][0]['case_count'])")"
 
+            # Verify before building the publishable image: the final image
+            # is pure assets with no shell, so the checks that used to run
+            # inside the published image live in the Dockerfile verify stage.
+            if ! docker build \
+              --file Dockerfile \
+              --target verify \
+              --build-arg "TASK_ID=${task}" \
+              --build-arg "EXPECT_MODE=${mode}" \
+              --build-arg "EXPECT_CASES=${cases}" \
+              "build/${task}"; then
+              failed=$((failed + 1))
+              echo "| ${task} | ${mode} | ${cases} | verification failed, not pushed |" >> "$GITHUB_STEP_SUMMARY"
+              cleanup_task "${task}"
+              continue
+            fi
+
             if ! docker build \
               --file Dockerfile \
               --build-arg "TASK_ID=${task}" \
@@ -161,41 +177,6 @@ jobs:
             # The assets now live in the image layer; the build context is a
             # second full copy and is dead weight for the rest of the iteration.
             rm -rf build .build
-
-            # Verify before pushing, so a bad image never reaches the registry
-            # and never gets skipped as already published on a later run.
-            if ! docker run --rm \
-              --env "TASK_ID=${task}" \
-              --env "EXPECT_CASES=${cases}" \
-              --env "EXPECT_MODE=${mode}" \
-              --entrypoint /bin/sh "${immutable}" -c '
-                set -eu
-                root="/opt/interactbench/data/problems/$TASK_ID"
-                set -- "$root"/cases/*.in
-                test "$#" -eq "$EXPECT_CASES"
-                test -f "$root/desc.md"
-                test -f "$root/meta.json"
-                test -f "$root/generator/gen_cases.cpp"
-                case "$EXPECT_MODE" in
-                  non_adaptive) test -f "$root/interactor/non_adaptive.cpp" ;;
-                  adaptive) test -f "$root/interactor/adaptive.cpp" ;;
-                  both)
-                    test -f "$root/interactor/non_adaptive.cpp"
-                    test -f "$root/interactor/adaptive.cpp"
-                    ;;
-                  *) echo "unknown interactor mode $EXPECT_MODE" >&2; exit 1 ;;
-                esac
-                test -f /opt/interactbench/LICENSE
-                test -f /opt/interactbench/artifact.json
-                test -f /opt/interactbench/third_party/testlib/testlib.h
-                cd /opt/interactbench
-                sha256sum -c SHA256SUMS > /dev/null
-              '; then
-              failed=$((failed + 1))
-              echo "| ${task} | ${mode} | ${cases} | verification failed, not pushed |" >> "$GITHUB_STEP_SUMMARY"
-              cleanup_task "${task}"
-              continue
-            fi
 
             if ! docker push "${immutable}" || ! docker push "${floating}"; then
               failed=$((failed + 1))

@@ -257,11 +257,19 @@ def materialize_task(
     problems_root.mkdir(parents=True)
     shutil.move(str(task_root), str(problems_root / task_id))
 
+    # Judging consumes meta.json, the case pool and the interactor sources;
+    # everything else the upstream task directory carries (statement,
+    # generator, scratch files) stays out of the published assets.
+    task_assets = problems_root / task_id
+    for entry in sorted(task_assets.iterdir()):
+        if entry.name in {"meta.json", "cases", "interactor"}:
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+
     shutil.copy2(upstream / "LICENSE", artifact_root / "LICENSE")
-    shutil.copytree(
-        upstream / "third_party" / "testlib",
-        artifact_root / "third_party" / "testlib",
-    )
 
     dataset = lock["dataset"]
     artifact = {

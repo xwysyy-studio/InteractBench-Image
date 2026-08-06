@@ -1,9 +1,10 @@
 # InteractBench task images
 
-This repository publishes tool-independent OCI images containing immutable
-InteractBench task assets. Every task in the pinned dataset gets its own image.
-The images do not include a judge runner, sandbox adapter, model output, or
-evaluation policy.
+This repository publishes OCI images containing immutable InteractBench
+judging assets. Every task in the pinned dataset gets its own image. Each
+image is a pure asset layer built from scratch: it has no base system, no
+shell, and no judge runner, sandbox adapter, model output, or evaluation
+policy.
 
 An image tag is the InteractBench problem ID, unchanged:
 
@@ -37,20 +38,20 @@ Resolve either tag to a digest and evaluate against the digest.
 ├── LICENSE
 ├── SHA256SUMS
 ├── artifact.json
-├── third_party/testlib/
 └── data/problems/<problem-id>/
-    ├── desc.md
     ├── meta.json
     ├── cases/
-    ├── generator/gen_cases.cpp
     └── interactor/
 ```
 
-`artifact.json` records the task ID, its interactor mode, the number of cases
-that were generated successfully, the configured numbering capacity, and every
-pinned revision. Consumers choose their own runner, compiler, isolation
-mechanism, case selection, and result interpretation. The image has no custom
-entrypoint.
+The image carries exactly what judging consumes: the task metadata, the case
+pool, and the interactor sources. The problem statement, the case generator,
+and the testlib header are not included; consumers that compile the
+interactors provide their own testlib. `artifact.json` records the task ID,
+its interactor mode, the number of cases that were generated successfully,
+the configured numbering capacity, and every pinned revision. Consumers
+choose their own runner, compiler, isolation mechanism, case selection, and
+result interpretation. The image has no custom entrypoint.
 
 ## Case numbering
 
@@ -81,14 +82,16 @@ colliding.
 ## Reproducibility
 
 [`task.lock.json`](task.lock.json) pins the InteractBench source revision, the
-Hugging Face dataset revision and the per-mode case count. For each task the
-publishing workflow verifies the dataset checksum, materializes the task from the
-pinned revision, compiles the task generator, attempts every configured seed,
-and builds an image from the successful outputs in their original numbered
-positions. A compile failure or a task with no successful case fails
-preparation. The workflow then runs the image and reads `SHA256SUMS` back from
-inside it, and only pushes once that check passes, so an image that fails its own
-integrity check never reaches the registry.
+Hugging Face dataset revision, the per-mode case count, and the image layout
+version. For each task the publishing workflow verifies the dataset checksum,
+materializes the task from the pinned revision, compiles the task generator,
+attempts every configured seed, and builds an image from the successful
+outputs in their original numbered positions. A compile failure or a task
+with no successful case fails preparation. Because the published image has no
+shell, the integrity check runs as a dedicated Dockerfile stage that copies
+the asset layer into a throwaway base image and verifies `SHA256SUMS` there;
+the workflow only pushes once that stage passes, so an image that fails its
+own integrity check never reaches the registry.
 
 Tasks are published one at a time. The workflow accepts an explicit problem ID
 list, a cap on how many tasks one run publishes, and a switch that skips a task
@@ -96,6 +99,5 @@ only when both of its tags already exist and resolve to the same digest, so the
 full dataset can be published across several unhurried runs and a task left
 half-pushed by an interrupted run is picked up again rather than skipped.
 
-The InteractBench source and dataset are distributed under MIT. The bundled
-testlib header carries its own MIT license under
-`/opt/interactbench/third_party/testlib/LICENSE`.
+The InteractBench source and dataset are distributed under MIT; the license
+text ships at `/opt/interactbench/LICENSE`.

@@ -51,6 +51,11 @@ class MaterializeTaskTests(unittest.TestCase):
 
             (task / "generator").mkdir(parents=True)
             (task / "cases").mkdir()
+            (task / "interactor").mkdir()
+            (task / "interactor" / "non_adaptive.cpp").write_text(
+                "// interactor\n", encoding="utf-8"
+            )
+            (task / "desc.md").write_text("statement\n", encoding="utf-8")
             (task / "meta.json").write_text(
                 json.dumps({"interactor_mode": "non_adaptive"}), encoding="utf-8"
             )
@@ -91,7 +96,8 @@ class MaterializeTaskTests(unittest.TestCase):
             )
 
             artifact_root = output / "problem_1" / "rootfs" / "opt" / "interactbench"
-            cases = artifact_root / "data" / "problems" / "problem_1" / "cases"
+            task_assets = artifact_root / "data" / "problems" / "problem_1"
+            cases = task_assets / "cases"
             self.assertEqual(artifact["case_count"], 2)
             self.assertEqual(
                 sorted(path.name for path in cases.glob("*.in")),
@@ -102,6 +108,29 @@ class MaterializeTaskTests(unittest.TestCase):
                 "seed=3 mode=-mode=non\n",
             )
             self.assertFalse((cases / "002.in").exists())
+            self.assertEqual(
+                sorted(path.name for path in task_assets.iterdir()),
+                ["cases", "interactor", "meta.json"],
+            )
+            self.assertFalse((artifact_root / "third_party").exists())
+            self.assertTrue((artifact_root / "LICENSE").is_file())
+            checksum_lines = (
+                (artifact_root / "SHA256SUMS")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            )
+            covered = sorted(line.split("  ", 1)[1] for line in checksum_lines)
+            self.assertEqual(
+                covered,
+                [
+                    "LICENSE",
+                    "artifact.json",
+                    "data/problems/problem_1/cases/001.in",
+                    "data/problems/problem_1/cases/003.in",
+                    "data/problems/problem_1/interactor/non_adaptive.cpp",
+                    "data/problems/problem_1/meta.json",
+                ],
+            )
 
 
 if __name__ == "__main__":
