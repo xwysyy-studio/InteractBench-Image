@@ -4,16 +4,17 @@ COPY rootfs/ /
 
 # The verify stage runs the integrity checks that used to run inside the
 # published image; the final image is pure assets and has no shell. Build it
-# explicitly with --target verify before building the default target.
+# explicitly with --target verify before building the default target. The
+# asset tree is bind-mounted from the assets stage instead of copied, so the
+# check adds no asset-sized layer to the builder's disk peak.
 FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS verify
-
-COPY --from=assets /opt/interactbench /opt/interactbench
 
 ARG TASK_ID
 ARG EXPECT_MODE
 ARG EXPECT_CASES
 
-RUN set -eu; \
+RUN --mount=type=bind,from=assets,source=/opt/interactbench,target=/opt/interactbench \
+    set -eu; \
     root="/opt/interactbench/data/problems/${TASK_ID}"; \
     set -- "$root"/cases/*.in; \
     test "$#" -eq "${EXPECT_CASES}"; \
@@ -52,6 +53,8 @@ LABEL org.interactbench.asset.root="/opt/interactbench/data/problems/${TASK_ID}"
 LABEL org.interactbench.source.revision="${SOURCE_REVISION}"
 LABEL org.interactbench.dataset.revision="${DATASET_REVISION}"
 
-COPY --from=assets / /
+# Same instruction and source as the assets stage, so BuildKit reuses one
+# cached layer for both instead of materializing a second asset-sized copy.
+COPY rootfs/ /
 
 WORKDIR /opt/interactbench

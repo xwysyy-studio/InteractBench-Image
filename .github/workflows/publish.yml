@@ -105,6 +105,9 @@ jobs:
 
           cleanup_task() {
             docker image rm -f "${IMAGE_NAME}:$1" "${IMAGE_NAME}:$1-${lock_digest}" > /dev/null 2>&1 || true
+            # Untagged verify-stage outputs land in the shared image store as
+            # dangling images that pin their layers across iterations.
+            docker image prune --force > /dev/null 2>&1 || true
             docker builder prune --all --force > /dev/null 2>&1 || true
             rm -rf build .build
           }
