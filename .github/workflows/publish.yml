@@ -36,9 +36,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      # One task can hold 5.4 GB of cases, and building its image peaks around
-      # 16 GB with the context, the BuildKit source copy and the committed layer
-      # all resident. A stock runner does not have that much free.
+      # The largest task holds about 15.5 GB of cases, and building its image
+      # peaks around three times that with the context, the BuildKit source
+      # copy and the committed layer all resident. A stock runner does not
+      # have that much free.
       - name: Reclaim runner disk
         run: |
           set -euo pipefail

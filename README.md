@@ -88,8 +88,9 @@ materializes the task from the pinned revision, compiles the task generator,
 attempts every configured seed, and builds an image from the successful
 outputs in their original numbered positions. A compile failure or a task
 with no successful case fails preparation. Because the published image has no
-shell, the integrity check runs as a dedicated Dockerfile stage that copies
-the asset layer into a throwaway base image and verifies `SHA256SUMS` there;
+shell, the integrity check runs as a dedicated Dockerfile stage that bind-mounts
+the asset layer read-only into a throwaway base image and verifies
+`SHA256SUMS` there;
 the workflow only pushes once that stage passes, so an image that fails its
 own integrity check never reaches the registry.
 
